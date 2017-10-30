@@ -16,6 +16,7 @@
 #include "CGObjCRuntime.h"
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
+#include "ConstantEmitter.h"
 #include "clang/CodeGen/ConstantInitBuilder.h"
 #include "clang/AST/DeclObjC.h"
 #include "llvm/ADT/SmallSet.h"
@@ -290,7 +291,7 @@ static llvm::Constant *tryCaptureAsConstant(CodeGenModule &CGM,
   const Expr *init = var->getInit();
   if (!init) return nullptr;
 
-  return CGM.EmitConstantInit(*var, CGF);
+  return ConstantEmitter(CGM, CGF).tryEmitAbstractForInitializer(*var);
 }
 
 /// Get the low bit of a nonzero character count.  This is the
@@ -724,21 +725,22 @@ llvm::Value *CodeGenFunction::EmitBlockLiteral(const CGBlockInfo &blockInfo) {
   llvm::Constant *blockFn
     = CodeGenFunction(CGM, true).GenerateBlockFunction(CurGD, blockInfo,
                                                        LocalDeclMap,
-                                                       isLambdaConv);
+                                                       isLambdaConv,
+                                                       blockInfo.CanBeGlobal);
   blockFn = llvm::ConstantExpr::getBitCast(blockFn, VoidPtrTy);
 
   // If there is nothing to capture, we can emit this as a global block.
   if (blockInfo.CanBeGlobal)
-    return buildGlobalBlock(CGM, blockInfo, blockFn);
+    return CGM.getAddrOfGlobalBlockIfEmitted(blockInfo.BlockExpression);
 
   // Otherwise, we have to emit this as a local block.
 
   llvm::Constant *isa =
       (!CGM.getContext().getLangOpts().OpenCL)
           ? CGM.getNSConcreteStackBlock()
-          : CGM.getNullPointer(cast<llvm::PointerType>(
-                                   CGM.getNSConcreteStackBlock()->getType()),
-                               QualType(getContext().VoidPtrTy));
+          : CGM.getNullPointer(VoidPtrPtrTy,
+                               CGM.getContext().getPointerType(
+                                   QualType(CGM.getContext().VoidPtrTy)));
   isa = llvm::ConstantExpr::getBitCast(isa, VoidPtrTy);
 
   // Build the block descriptor.
@@ -1113,17 +1115,14 @@ CodeGenModule::GetAddrOfGlobalBlock(const BlockExpr *BE,
   computeBlockInfo(*this, nullptr, blockInfo);
 
   // Using that metadata, generate the actual block function.
-  llvm::Constant *blockFn;
   {
     CodeGenFunction::DeclMapTy LocalDeclMap;
-    blockFn = CodeGenFunction(*this).GenerateBlockFunction(GlobalDecl(),
-                                                           blockInfo,
-                                                           LocalDeclMap,
-                                                           false);
+    CodeGenFunction(*this).GenerateBlockFunction(
+        GlobalDecl(), blockInfo, LocalDeclMap,
+        /*IsLambdaConversionToBlock*/ false, /*BuildGlobalBlock*/ true);
   }
-  blockFn = llvm::ConstantExpr::getBitCast(blockFn, VoidPtrTy);
 
-  return buildGlobalBlock(*this, blockInfo, blockFn);
+  return getAddrOfGlobalBlockIfEmitted(BE);
 }
 
 static llvm::Constant *buildGlobalBlock(CodeGenModule &CGM,
@@ -1141,12 +1140,11 @@ static llvm::Constant *buildGlobalBlock(CodeGenModule &CGM,
   auto fields = builder.beginStruct();
 
   // isa
-  fields.add(
-      (!CGM.getContext().getLangOpts().OpenCL)
-          ? CGM.getNSConcreteGlobalBlock()
-          : CGM.getNullPointer(cast<llvm::PointerType>(
-                                   CGM.getNSConcreteGlobalBlock()->getType()),
-                               QualType(CGM.getContext().VoidPtrTy)));
+  fields.add((!CGM.getContext().getLangOpts().OpenCL)
+                 ? CGM.getNSConcreteGlobalBlock()
+                 : CGM.getNullPointer(CGM.VoidPtrPtrTy,
+                                      CGM.getContext().getPointerType(QualType(
+                                          CGM.getContext().VoidPtrTy))));
 
   // __flags
   BlockFlags flags = BLOCK_IS_GLOBAL | BLOCK_HAS_SIGNATURE;
@@ -1226,7 +1224,8 @@ llvm::Function *
 CodeGenFunction::GenerateBlockFunction(GlobalDecl GD,
                                        const CGBlockInfo &blockInfo,
                                        const DeclMapTy &ldm,
-                                       bool IsLambdaConversionToBlock) {
+                                       bool IsLambdaConversionToBlock,
+                                       bool BuildGlobalBlock) {
   const BlockDecl *blockDecl = blockInfo.getBlockDecl();
 
   CurGD = GD;
@@ -1284,6 +1283,10 @@ CodeGenFunction::GenerateBlockFunction(GlobalDecl GD,
   llvm::Function *fn = llvm::Function::Create(
       fnLLVMType, llvm::GlobalValue::InternalLinkage, name, &CGM.getModule());
   CGM.SetInternalFunctionAttributes(blockDecl, fn, fnInfo);
+
+  if (BuildGlobalBlock)
+    buildGlobalBlock(CGM, blockInfo,
+                     llvm::ConstantExpr::getBitCast(fn, VoidPtrTy));
 
   // Begin generating the function.
   StartFunction(blockDecl, fnType->getReturnType(), fn, fnInfo, args,
