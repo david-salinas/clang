@@ -2837,6 +2837,22 @@ enum CXLanguageKind {
 CINDEX_LINKAGE enum CXLanguageKind clang_getCursorLanguage(CXCursor cursor);
 
 /**
+ * \brief Describe the "thread-local storage (TLS) kind" of the declaration
+ * referred to by a cursor.
+ */
+enum CXTLSKind {
+  CXTLS_None = 0,
+  CXTLS_Dynamic,
+  CXTLS_Static
+};
+
+/**
+ * \brief Determine the "thread-local storage (TLS) kind" of the declaration
+ * referred to by a cursor.
+ */
+CINDEX_LINKAGE enum CXTLSKind clang_getCursorTLSKind(CXCursor cursor);
+
+/**
  * \brief Returns the translation unit that a cursor originated from.
  */
 CINDEX_LINKAGE CXTranslationUnit clang_Cursor_getTranslationUnit(CXCursor);
@@ -3115,8 +3131,9 @@ enum CXTypeKind {
   CXType_ObjCSel = 29,
   CXType_Float128 = 30,
   CXType_Half = 31,
+  CXType_Float16 = 32,
   CXType_FirstBuiltin = CXType_Void,
-  CXType_LastBuiltin  = CXType_Half,
+  CXType_LastBuiltin  = CXType_Float16,
 
   CXType_Complex = 100,
   CXType_Pointer = 101,
@@ -3205,7 +3222,9 @@ enum CXCallingConv {
   CXCallingConv_AAPCS_VFP = 7,
   CXCallingConv_X86RegCall = 8,
   CXCallingConv_IntelOclBicc = 9,
-  CXCallingConv_X86_64Win64 = 10,
+  CXCallingConv_Win64 = 10,
+  /* Alias for compatibility with older versions of API. */
+  CXCallingConv_X86_64Win64 = CXCallingConv_Win64,
   CXCallingConv_X86_64SysV = 11,
   CXCallingConv_X86VectorCall = 12,
   CXCallingConv_Swift = 13,
@@ -4274,6 +4293,12 @@ CINDEX_LINKAGE CXString clang_Cursor_getMangling(CXCursor);
 CINDEX_LINKAGE CXStringSet *clang_Cursor_getCXXManglings(CXCursor);
 
 /**
+ * \brief Retrieve the CXStrings representing the mangled symbols of the ObjC
+ * class interface or implementation at the cursor.
+ */
+CINDEX_LINKAGE CXStringSet *clang_Cursor_getObjCManglings(CXCursor);
+
+/**
  * @}
  */
 
@@ -4415,6 +4440,11 @@ CINDEX_LINKAGE unsigned clang_CXXMethod_isStatic(CXCursor C);
  * one of the base classes.
  */
 CINDEX_LINKAGE unsigned clang_CXXMethod_isVirtual(CXCursor C);
+
+/**
+ * \brief Determine if an enum declaration refers to a scoped enum.
+ */
+CINDEX_LINKAGE unsigned clang_EnumDecl_isScoped(CXCursor C);
 
 /**
  * \brief Determine if a C++ member function or member function template is

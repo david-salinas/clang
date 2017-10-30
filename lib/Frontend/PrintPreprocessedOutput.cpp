@@ -38,8 +38,8 @@ static void PrintMacroDefinition(const IdentifierInfo &II, const MacroInfo &MI,
 
   if (MI.isFunctionLike()) {
     OS << '(';
-    if (!MI.arg_empty()) {
-      MacroInfo::arg_iterator AI = MI.arg_begin(), E = MI.arg_end();
+    if (!MI.param_empty()) {
+      MacroInfo::param_iterator AI = MI.param_begin(), E = MI.param_end();
       for (; AI+1 != E; ++AI) {
         OS << (*AI)->getName();
         OS << ',';
@@ -143,6 +143,8 @@ public:
                      ArrayRef<int> Ids) override;
   void PragmaWarningPush(SourceLocation Loc, int Level) override;
   void PragmaWarningPop(SourceLocation Loc) override;
+  void PragmaAssumeNonNullBegin(SourceLocation Loc) override;
+  void PragmaAssumeNonNullEnd(SourceLocation Loc) override;
 
   bool HandleFirstTokOnLine(Token &Tok);
 
@@ -546,6 +548,22 @@ void PrintPPOutputPPCallbacks::PragmaWarningPop(SourceLocation Loc) {
   startNewLineIfNeeded();
   MoveToLine(Loc);
   OS << "#pragma warning(pop)";
+  setEmittedDirectiveOnThisLine();
+}
+
+void PrintPPOutputPPCallbacks::
+PragmaAssumeNonNullBegin(SourceLocation Loc) {
+  startNewLineIfNeeded();
+  MoveToLine(Loc);
+  OS << "#pragma clang assume_nonnull begin";
+  setEmittedDirectiveOnThisLine();
+}
+
+void PrintPPOutputPPCallbacks::
+PragmaAssumeNonNullEnd(SourceLocation Loc) {
+  startNewLineIfNeeded();
+  MoveToLine(Loc);
+  OS << "#pragma clang assume_nonnull end";
   setEmittedDirectiveOnThisLine();
 }
 
