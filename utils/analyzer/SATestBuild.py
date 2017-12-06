@@ -120,8 +120,6 @@ BuildLogName = "run_static_analyzer.log"
 # displayed when buildbot detects a build failure.
 NumOfFailuresInSummary = 10
 FailuresSummaryFileName = "failures.txt"
-# Summary of the result diffs.
-DiffsSummaryFileName = "diffs.txt"
 
 # The scan-build result directory.
 SBOutputDirName = "ScanBuildResults"
@@ -272,10 +270,11 @@ def runScanBuild(Dir, SBOutputDir, PBuildLogFile):
                        stderr=PBuildLogFile,
                        stdout=PBuildLogFile,
                        shell=True)
-    except:
-        print "Error: scan-build failed. See ", PBuildLogFile.name,\
-              " for details."
-        raise
+    except CalledProcessError:
+        print "Error: scan-build failed. Its output was: "
+        PBuildLogFile.seek(0)
+        shutil.copyfileobj(PBuildLogFile, sys.stdout)
+        sys.exit(1)
 
 
 def runAnalyzePreprocessed(Dir, SBOutputDir, Mode):
@@ -433,6 +432,16 @@ def CleanUpEmptyPlists(SBOutputDir):
             continue
 
 
+def CleanUpEmptyFolders(SBOutputDir):
+    """
+    Remove empty folders from results, as git would not store them.
+    """
+    Subfolders = glob.glob(SBOutputDir + "/*")
+    for Folder in Subfolders:
+        if not os.listdir(Folder):
+            os.removedirs(Folder)
+
+
 def checkBuild(SBOutputDir):
     """
     Given the scan-build output directory, checks if the build failed
@@ -445,34 +454,27 @@ def checkBuild(SBOutputDir):
     TotalFailed = len(Failures)
     if TotalFailed == 0:
         CleanUpEmptyPlists(SBOutputDir)
+        CleanUpEmptyFolders(SBOutputDir)
         Plists = glob.glob(SBOutputDir + "/*/*.plist")
         print "Number of bug reports (non-empty plist files) produced: %d" %\
             len(Plists)
         return
 
-    # Create summary file to display when the build fails.
-    SummaryPath = os.path.join(
-        SBOutputDir, LogFolderName, FailuresSummaryFileName)
-    if (Verbose > 0):
-        print "  Creating the failures summary file %s" % (SummaryPath,)
-
-    with open(SummaryPath, "w+") as SummaryLog:
-        SummaryLog.write("Total of %d failures discovered.\n" % (TotalFailed,))
-        if TotalFailed > NumOfFailuresInSummary:
-            SummaryLog.write("See the first %d below.\n" % (
-                NumOfFailuresInSummary,))
+    print "Error: analysis failed."
+    print "Total of %d failures discovered." % TotalFailed
+    if TotalFailed > NumOfFailuresInSummary:
+        print "See the first %d below.\n" % NumOfFailuresInSummary
         # TODO: Add a line "See the results folder for more."
 
-        Idx = 0
-        for FailLogPathI in Failures:
-            if Idx >= NumOfFailuresInSummary:
-                break
-            Idx += 1
-            SummaryLog.write("\n-- Error #%d -----------\n" % (Idx,))
-            with open(FailLogPathI, "r") as FailLogI:
-                shutil.copyfileobj(FailLogI, SummaryLog)
+    Idx = 0
+    for FailLogPathI in Failures:
+        if Idx >= NumOfFailuresInSummary:
+            break
+        Idx += 1
+        print "\n-- Error #%d -----------\n" % Idx
+        with open(FailLogPathI, "r") as FailLogI:
+            shutil.copyfileobj(FailLogI, sys.stdout)
 
-    print "Error: analysis failed. See ", SummaryPath
     sys.exit(1)
 
 
@@ -526,9 +528,8 @@ def runCmpResults(Dir, Strictness=0):
         if Verbose == 1:
             print "  Comparing Results: %s %s" % (RefDir, NewDir)
 
-        DiffsPath = os.path.join(NewDir, DiffsSummaryFileName)
         PatchedSourceDirPath = os.path.join(Dir, PatchedSourceDirName)
-        Opts = CmpRuns.CmpOptions(DiffsPath, "", PatchedSourceDirPath)
+        Opts = CmpRuns.CmpOptions(rootA="", rootB=PatchedSourceDirPath)
         # Scan the results, delete empty plist files.
         NumDiffs, ReportsInRef, ReportsInNew = \
             CmpRuns.dumpScanBuildResultsDiff(RefDir, NewDir, Opts, False)

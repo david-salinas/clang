@@ -5084,6 +5084,11 @@ void IvarLayoutBuilder::visitField(const FieldDecl *field,
 
   // Drill down into arrays.
   uint64_t numElts = 1;
+  if (auto arrayType = CGM.getContext().getAsIncompleteArrayType(fieldType)) {
+    numElts = 0;
+    fieldType = arrayType->getElementType();
+  }
+  // Unlike incomplete arrays, constant arrays can be nested.
   while (auto arrayType = CGM.getContext().getAsConstantArrayType(fieldType)) {
     numElts *= arrayType->getSize().getZExtValue();
     fieldType = arrayType->getElementType();
@@ -7553,8 +7558,9 @@ CGObjCNonFragileABIMac::GetInterfaceEHType(const ObjCInterfaceDecl *ID,
   llvm::Value *VTableIdx = llvm::ConstantInt::get(CGM.Int32Ty, 2);
   ConstantInitBuilder builder(CGM);
   auto values = builder.beginStruct(ObjCTypes.EHTypeTy);
-  values.add(llvm::ConstantExpr::getGetElementPtr(VTableGV->getValueType(),
-                                                  VTableGV, VTableIdx));
+  values.add(
+    llvm::ConstantExpr::getInBoundsGetElementPtr(VTableGV->getValueType(),
+                                                 VTableGV, VTableIdx));
   values.add(GetClassName(ClassName));
   values.add(GetClassGlobal(ID, /*metaclass*/ false, NotForDefinition));
 
