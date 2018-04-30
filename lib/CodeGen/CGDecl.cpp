@@ -964,20 +964,15 @@ llvm::Value *CodeGenFunction::EmitLifetimeStart(uint64_t Size,
                                                 llvm::Value *Addr) {
   if (!ShouldEmitLifetimeMarkers)
     return nullptr;
-
-  llvm::Value *SizeV = llvm::ConstantInt::get(Int64Ty, Size);
-  Addr = Builder.CreateBitCast(Addr, AllocaInt8PtrTy);
-  llvm::CallInst *C =
-      Builder.CreateCall(CGM.getLLVMLifetimeStartFn(), {SizeV, Addr});
-  C->setDoesNotThrow();
+  Addr = EmitCastToVoidPtrInAllocaAddrSpace(Addr);
+  auto *SizeV = llvm::ConstantInt::get(Int64Ty, Size);
+  Builder.CreateLifetimeStart(Addr, SizeV);
   return SizeV;
 }
 
 void CodeGenFunction::EmitLifetimeEnd(llvm::Value *Size, llvm::Value *Addr) {
-  Addr = Builder.CreateBitCast(Addr, AllocaInt8PtrTy);
-  llvm::CallInst *C =
-      Builder.CreateCall(CGM.getLLVMLifetimeEndFn(), {Size, Addr});
-  C->setDoesNotThrow();
+  Addr = EmitCastToVoidPtrInAllocaAddrSpace(Addr);
+  Builder.CreateLifetimeEnd(Addr, llvm::cast<llvm::ConstantInt>(Size));
 }
 
 void CodeGenFunction::EmitAndRegisterVariableArrayDimensions(

@@ -59,6 +59,18 @@ llvm::Value *CodeGenFunction::EmitCastToVoidPtr(llvm::Value *value) {
   return Builder.CreateBitCast(value, destType);
 }
 
+llvm::Value *
+CodeGenFunction::EmitCastToVoidPtrInAllocaAddrSpace(llvm::Value *V) {
+  if (V->getType()->getPointerAddressSpace() !=
+      CGM.getDataLayout().getAllocaAddrSpace()) {
+    return getTargetHooks().performAddrSpaceCast(
+        *this, V, getASTAllocaAddressSpace(), LangAS::Default, AllocaInt8PtrTy,
+        /*non-null*/ true);
+  } else {
+    return Builder.CreateBitCast(V, AllocaInt8PtrTy);
+  }
+}
+
 /// CreateTempAlloca - This creates a alloca and inserts it into the entry
 /// block.
 Address CodeGenFunction::CreateTempAlloca(llvm::Type *Ty, CharUnits Align,
