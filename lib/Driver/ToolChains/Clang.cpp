@@ -3218,7 +3218,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
         CmdArgs.push_back("-P");
     }
   } else if (isa<AssembleJobAction>(JA)) {
-    CmdArgs.push_back("-emit-obj");
+    // AMDGCN does not support linking obj files.
+    if (IsHIP && Triple.getArch() == llvm::Triple::amdgcn)
+      CmdArgs.push_back("-emit-llvm-bc");
+    else
+      CmdArgs.push_back("-emit-obj");
 
     CollectArgsForIntegratedAssembler(C, Args, CmdArgs, D);
 
