@@ -304,6 +304,157 @@ static DebugInfoKind mustEmitDebugInfo(const ArgList &Args) {
   return NoDebug;
 }
 
+static bool addBCLib(Compilation &C, const ArgList &Args,
+                     ArgStringList &CmdArgs, ArgStringList LibraryPaths,
+                     StringRef BCName) {
+  std::string FullName;
+  bool FoundLibDevice = false;
+  for (std::string LibraryPath : LibraryPaths) {
+    SmallString<128> Path(LibraryPath);
+    llvm::sys::path::append(Path, BCName);
+    FullName = Args.MakeArgString(Path);
+    if (llvm::sys::fs::exists(FullName.c_str())) {
+      FoundLibDevice = true;
+      break;
+    }
+  }
+  if (!FoundLibDevice)
+    C.getDriver().Diag(diag::err_drv_no_such_file) << BCName;
+  CmdArgs.push_back(Args.MakeArgString(FullName));
+  return FoundLibDevice;
+}
+
+// For amdgcn the inputs of the linker job are device bitcode and output is
+// object file. It calls llvm-link, opt, llc, then lld steps.
+void AMDGCN::Linker::ConstructJob(Compilation &C, const JobAction &JA,
+                                  const InputInfo &Output,
+                                  const InputInfoList &Inputs,
+                                  const ArgList &Args,
+                                  const char *LinkingOutput) const {
+
+  assert(StringRef(JA.getOffloadingArch()).startswith("gfx") &&
+         " unless gfx processor, backend should be clang");
+  const auto &TC =
+      static_cast<const toolchains::CudaToolChain &>(getToolChain());
+  assert(TC.getTriple().getArch() == llvm::Triple::amdgcn && "Wrong platform");
+
+  // Construct llvm-link command.
+  ArgStringList CmdArgs;
+  // Add the input bc's created by compile step.
+  for (InputInfoList::const_iterator it = Inputs.begin(), ie = Inputs.end();
+       it != ie; ++it) {
+    const InputInfo &II = *it;
+    CmdArgs.push_back(II.getFilename());
+  }
+
+  std::string GFXNAME = JA.getOffloadingArch();
+
+  ArgStringList LibraryPaths;
+
+  // Find in --hip-device-lib-path and HIP_LIBRARY_PATH.
+  for (auto Arg : Args) {
+    if (Arg->getSpelling() == "--hip-device-lib-path=") {
+      LibraryPaths.push_back(Args.MakeArgString(Arg->getValue()));
+    }
+  }
+
+  addDirectoryList(Args, LibraryPaths, "-L", "HIP_DEVICE_LIB_PATH");
+
+  addBCLib(C, Args, CmdArgs, LibraryPaths, "hip.amdgcn.bc");
+  addBCLib(C, Args, CmdArgs, LibraryPaths, "opencl.amdgcn.bc");
+  addBCLib(C, Args, CmdArgs, LibraryPaths, "ockl.amdgcn.bc");
+  addBCLib(C, Args, CmdArgs, LibraryPaths, "irif.amdgcn.bc");
+  addBCLib(C, Args, CmdArgs, LibraryPaths, "ocml.amdgcn.bc");
+  addBCLib(C, Args, CmdArgs, LibraryPaths, "oclc_finite_only_off.amdgcn.bc");
+  addBCLib(C, Args, CmdArgs, LibraryPaths, "oclc_daz_opt_off.amdgcn.bc");
+  addBCLib(C, Args, CmdArgs, LibraryPaths,
+           "oclc_correctly_rounded_sqrt_on.amdgcn.bc");
+  addBCLib(C, Args, CmdArgs, LibraryPaths, "oclc_unsafe_math_off.amdgcn.bc");
+  addBCLib(C, Args, CmdArgs, LibraryPaths, "hc.amdgcn.bc");
+  // Drop gfx in GFXNAME.
+  addBCLib(C, Args, CmdArgs, LibraryPaths,
+           (Twine("oclc_isa_version_") + StringRef(GFXNAME).drop_front(3) +
+            ".amdgcn.bc")
+               .str());
+
+  // Add an intermediate output file which is input to opt
+  CmdArgs.push_back("-o");
+  std::string TmpName = C.getDriver().GetTemporaryPath("OPT_INPUT", "bc");
+  const char *ResultingBitcodeF =
+      C.addTempFile(C.getArgs().MakeArgString(TmpName.c_str()));
+  CmdArgs.push_back(ResultingBitcodeF);
+  SmallString<128> ExecPath(C.getDriver().Dir);
+  llvm::sys::path::append(ExecPath, "llvm-link");
+  const char *Exec = Args.MakeArgString(ExecPath);
+  C.addCommand(llvm::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
+
+  // Construct opt command.
+  ArgStringList OptArgs;
+  // The input to opt is the output from llvm-link.
+  OptArgs.push_back(ResultingBitcodeF);
+  // Pass optimization arg to opt.
+  if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
+    StringRef OOpt = "3";
+    if (A->getOption().matches(options::OPT_O4) ||
+        A->getOption().matches(options::OPT_Ofast))
+      OOpt = "3";
+    else if (A->getOption().matches(options::OPT_O0))
+      OOpt = "0";
+    else if (A->getOption().matches(options::OPT_O)) {
+      // -Os, -Oz, and -O(anything else) map to -O2
+      OOpt = llvm::StringSwitch<const char *>(A->getValue())
+                 .Case("1", "1")
+                 .Case("2", "2")
+                 .Case("3", "3")
+                 .Case("s", "2")
+                 .Case("z", "2")
+                 .Default("2");
+    }
+    OptArgs.push_back(Args.MakeArgString(llvm::Twine("-O") + OOpt));
+  }
+  OptArgs.push_back("-mtriple=amdgcn-amd-amdhsa");
+  const char *mcpustr = Args.MakeArgString("-mcpu=" + GFXNAME);
+  OptArgs.push_back(mcpustr);
+  OptArgs.push_back("-o");
+  std::string OptOutputFileName =
+      C.getDriver().GetTemporaryPath("OPT_OUTPUT", "bc");
+  const char *OptOutputFile =
+      C.addTempFile(C.getArgs().MakeArgString(OptOutputFileName.c_str()));
+  OptArgs.push_back(OptOutputFile);
+  SmallString<128> OptPath(C.getDriver().Dir);
+  llvm::sys::path::append(OptPath, "opt");
+  const char *OptExec = Args.MakeArgString(OptPath);
+  C.addCommand(llvm::make_unique<Command>(JA, *this, OptExec, OptArgs, Inputs));
+
+  // Construct llc command.
+  ArgStringList LlcArgs;
+  LlcArgs.push_back(OptOutputFile);
+  LlcArgs.push_back("-mtriple=amdgcn-amd-amdhsa");
+  LlcArgs.push_back("-filetype=obj");
+  LlcArgs.push_back(Args.MakeArgString("-mcpu=" + GFXNAME));
+  LlcArgs.push_back("-o");
+  std::string LlcOutputFileName =
+      C.getDriver().GetTemporaryPath("LLC_OUTPUT", "o");
+  const char *LlcOutputFile =
+      C.addTempFile(C.getArgs().MakeArgString(LlcOutputFileName.c_str()));
+  LlcArgs.push_back(LlcOutputFile);
+  SmallString<128> LlcPath(C.getDriver().Dir);
+  llvm::sys::path::append(LlcPath, "llc");
+  const char *Llc = Args.MakeArgString(LlcPath);
+  C.addCommand(llvm::make_unique<Command>(JA, *this, Llc, LlcArgs, Inputs));
+
+  // Construct lld command.
+  ArgStringList LldArgs;
+  // The output from ld.lld is an HSA code object file.
+  LldArgs.append({"-flavor", "gnu", "--no-undefined", "-shared", "-o"});
+  LldArgs.push_back(Output.getFilename());
+  LldArgs.push_back(LlcOutputFile);
+  SmallString<128> LldPath(C.getDriver().Dir);
+  llvm::sys::path::append(LldPath, "lld");
+  const char *Lld = Args.MakeArgString(LldPath);
+  C.addCommand(llvm::make_unique<Command>(JA, *this, Lld, LldArgs, Inputs));
+}
+
 void NVPTX::Assembler::ConstructJob(Compilation &C, const JobAction &JA,
                                     const InputInfo &Output,
                                     const InputInfoList &Inputs,
@@ -588,10 +739,12 @@ void CudaToolChain::addClangTargetOptions(
   StringRef GpuArch = DriverArgs.getLastArgValue(options::OPT_march_EQ);
   assert(!GpuArch.empty() && "Must have an explicit GPU arch.");
   assert((DeviceOffloadingKind == Action::OFK_OpenMP ||
-          DeviceOffloadingKind == Action::OFK_Cuda) &&
-         "Only OpenMP or CUDA offloading kinds are supported for NVIDIA GPUs.");
+          DeviceOffloadingKind == Action::OFK_Cuda ||
+          DeviceOffloadingKind == Action::OFK_HIP) &&
+         "Only OpenMP, CUDA, or HIP offloading kinds are supported for GPUs.");
 
-  if (DeviceOffloadingKind == Action::OFK_Cuda) {
+  if (DeviceOffloadingKind == Action::OFK_Cuda ||
+      DeviceOffloadingKind == Action::OFK_HIP) {
     CC1Args.push_back("-fcuda-is-device");
 
     if (DriverArgs.hasFlag(options::OPT_fcuda_flush_denormals_to_zero,
@@ -607,7 +760,8 @@ void CudaToolChain::addClangTargetOptions(
       CC1Args.push_back("-fcuda-rdc");
   }
 
-  if (DriverArgs.hasArg(options::OPT_nocudalib))
+  if (DriverArgs.hasArg(options::OPT_nocudalib) ||
+      DeviceOffloadingKind == Action::OFK_HIP)
     return;
 
   std::string LibDeviceFile = CudaInstallation.getLibDeviceFile(GpuArch);
@@ -762,16 +916,24 @@ CudaToolChain::TranslateArgs(const llvm::opt::DerivedArgList &Args,
     DAL->eraseArg(options::OPT_march_EQ);
     DAL->AddJoinedArg(nullptr, Opts.getOption(options::OPT_march_EQ), BoundArch);
   }
+
   return DAL;
 }
+// nvptx does not use the integrated assembler with CUDA and forks out to
+// ptxas.
+bool CudaToolChain::useIntegratedAs() const { return !getTriple().isNVPTX(); }
 
 Tool *CudaToolChain::buildAssembler() const {
-  return new tools::NVPTX::Assembler(*this);
+  if (getTriple().isNVPTX())
+    return new tools::NVPTX::Assembler(*this);
+  return ToolChain::buildAssembler();
 }
 
 Tool *CudaToolChain::buildLinker() const {
   if (OK == Action::OFK_OpenMP)
     return new tools::NVPTX::OpenMPLinker(*this);
+  if (getTriple().getArch() == llvm::Triple::amdgcn)
+    return new tools::AMDGCN::Linker(*this);
   return new tools::NVPTX::Linker(*this);
 }
 

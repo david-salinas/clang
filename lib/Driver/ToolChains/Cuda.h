@@ -127,6 +127,25 @@ class LLVM_LIBRARY_VISIBILITY OpenMPLinker : public Tool {
 };
 
 } // end namespace NVPTX
+
+namespace AMDGCN {
+// Runs llvm-link/opt/llc/lld, which links multiple LLVM bitcode, together with
+// device library, then compiles it to ISA in a shared object.
+class LLVM_LIBRARY_VISIBILITY Linker : public Tool {
+public:
+  Linker(const ToolChain &TC)
+      : Tool("AMDGCN::Linker", "amdgcn-link", TC, RF_Full,
+             llvm::sys::WEM_UTF8, "--options-file") {}
+
+  bool hasIntegratedCPP() const override { return false; }
+
+  void ConstructJob(Compilation &C, const JobAction &JA,
+                    const InputInfo &Output, const InputInfoList &Inputs,
+                    const llvm::opt::ArgList &TCArgs,
+                    const char *LinkingOutput) const override;
+};
+
+} // end namespace AMDGCN
 } // end namespace tools
 
 namespace toolchains {
@@ -150,9 +169,7 @@ public:
                              llvm::opt::ArgStringList &CC1Args,
                              Action::OffloadKind DeviceOffloadKind) const override;
 
-  // Never try to use the integrated assembler with CUDA; always fork out to
-  // ptxas.
-  bool useIntegratedAs() const override { return false; }
+  bool useIntegratedAs() const override;
   bool isCrossCompiling() const override { return true; }
   bool isPICDefault() const override { return false; }
   bool isPIEDefault() const override { return false; }
