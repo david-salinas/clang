@@ -579,6 +579,8 @@ def fno_cuda_approx_transcendentals : Flag<["-"], "fno-cuda-approx-transcendenta
 def fcuda_rdc : Flag<["-"], "fcuda-rdc">, Flags<[CC1Option]>,
   HelpText<"Generate relocatable device code, also known as separate compilation mode.">;
 def fno_cuda_rdc : Flag<["-"], "fno-cuda-rdc">;
+def fhip_dump_offload_linker_script : Flag<["-"], "fhip-dump-offload-linker-script">,
+  Group<f_Group>, Flags<[NoArgumentUnused, HelpHidden]>;
 def dA : Flag<["-"], "dA">, Group<d_Group>;
 def dD : Flag<["-"], "dD">, Group<d_Group>, Flags<[CC1Option]>,
   HelpText<"Print macro definitions in -E mode in addition to normal output">;

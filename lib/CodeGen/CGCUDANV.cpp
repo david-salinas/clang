@@ -310,9 +310,10 @@ llvm::Function *CGNVCUDARuntime::makeRegisterGlobalsFn() {
 /// }
 /// \endcode
 llvm::Function *CGNVCUDARuntime::makeModuleCtorFunction() {
+  bool IsHIP = CGM.getLangOpts().HIP;
   // No need to generate ctors/dtors if there is no GPU binary.
-  std::string GpuBinaryFileName = CGM.getCodeGenOpts().CudaGpuBinaryFileName;
-  if (GpuBinaryFileName.empty())
+  StringRef CudaGpuBinaryFileName = CGM.getCodeGenOpts().CudaGpuBinaryFileName;
+  if (CudaGpuBinaryFileName.empty() && !IsHIP)
     return nullptr;
 
   // void __cuda_register_globals(void* handle);
@@ -334,12 +335,16 @@ llvm::Function *CGNVCUDARuntime::makeModuleCtorFunction() {
   // global variable and save a reference in GpuBinaryHandle to be cleaned up
   // in destructor on exit. Then associate all known kernels with the GPU binary
   // handle so CUDA runtime can figure out what to call on the GPU side.
-  llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> GpuBinaryOrErr =
-      llvm::MemoryBuffer::getFileOrSTDIN(GpuBinaryFileName);
-  if (std::error_code EC = GpuBinaryOrErr.getError()) {
-    CGM.getDiags().Report(diag::err_cannot_open_file)
-        << GpuBinaryFileName << EC.message();
-    return nullptr;
+  std::unique_ptr<llvm::MemoryBuffer> CudaGpuBinary;
+  if (!IsHIP) {
+    llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>> CudaGpuBinaryOrErr =
+        llvm::MemoryBuffer::getFileOrSTDIN(CudaGpuBinaryFileName);
+    if (std::error_code EC = CudaGpuBinaryOrErr.getError()) {
+      CGM.getDiags().Report(diag::err_cannot_open_file)
+          << CudaGpuBinaryFileName << EC.message();
+      return nullptr;
+    }
+    CudaGpuBinary = std::move(CudaGpuBinaryOrErr.get());
   }
 
   llvm::Function *ModuleCtorFunc = llvm::Function::Create(
@@ -353,7 +358,9 @@ llvm::Function *CGNVCUDARuntime::makeModuleCtorFunction() {
   CtorBuilder.SetInsertPoint(CtorEntryBB);
 
   const char *FatbinConstantName;
-  if (RelocatableDeviceCode)
+  if (IsHIP)
+    FatbinConstantName = ".hip_fatbin";
+  else if (RelocatableDeviceCode)
     // TODO: Figure out how this is called on mac OS!
     FatbinConstantName = "__nv_relfatbin";
   else
@@ -365,6 +372,22 @@ llvm::Function *CGNVCUDARuntime::makeModuleCtorFunction() {
   // TODO: Figure out how this is called on mac OS!
   const char *NVModuleIDSectionName = "__nv_module_id";
 
+  // For HIP, create an external symbol __hip_fatbin in section .hip_fatbin.
+  // The external symbol is supposed to contain the fat binary but will be
+  // populated somewhere else, e.g. by lld through link script.
+  // For CUDA, create a string literal containing the fat binary loaded from
+  // the given file.
+  llvm::Constant *FatBinStr;
+  if (IsHIP) {
+    FatBinStr = new llvm::GlobalVariable(
+        CGM.getModule(), CGM.Int8Ty,
+        /*isConstant=*/true, llvm::GlobalValue::ExternalLinkage, nullptr,
+        "__hip_fatbin", nullptr,
+        llvm::GlobalVariable::NotThreadLocal);
+    cast<llvm::GlobalVariable>(FatBinStr)->setSection(FatbinConstantName);
+  } else
+    FatBinStr = makeConstantString(CudaGpuBinary->getBuffer(), "",
+                                   FatbinConstantName, 8);
   // Create initialized wrapper structure that points to the loaded GPU binary
   ConstantInitBuilder Builder(CGM);
   auto Values = Builder.beginStruct(FatbinWrapperTy);
@@ -373,8 +396,7 @@ llvm::Function *CGNVCUDARuntime::makeModuleCtorFunction() {
   // Fatbin version.
   Values.addInt(IntTy, 1);
   // Data.
-  Values.add(makeConstantString(GpuBinaryOrErr.get()->getBuffer(), "",
-                                FatbinConstantName, 8));
+  Values.add(FatBinStr);
   // Unused in fatbin v1.
   Values.add(llvm::ConstantPointerNull::get(VoidPtrTy));
   llvm::GlobalVariable *FatbinWrapper = Values.finishAndCreateGlobal(
