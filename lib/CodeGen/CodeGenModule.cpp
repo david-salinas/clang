@@ -4032,6 +4032,9 @@ GenerateStringLiteral(llvm::Constant *C, llvm::GlobalValue::LinkageTypes LT,
   unsigned AddrSpace = 0;
   if (CGM.getLangOpts().OpenCL)
     AddrSpace = CGM.getContext().getTargetAddressSpace(LangAS::opencl_constant);
+  else if (auto AS = CGM.getTarget().getConstantAddressSpace()) {
+    AddrSpace = CGM.getContext().getTargetAddressSpace(AS.getValue());
+  }
 
   llvm::Module &M = CGM.getModule();
   // Create a global variable for this string
@@ -4093,7 +4096,19 @@ CodeGenModule::GetAddrOfConstantStringFromLiteral(const StringLiteral *S,
 
   SanitizerMD->reportGlobalToASan(GV, S->getStrTokenLoc(0), "<string literal>",
                                   QualType());
-  return ConstantAddress(GV, Alignment);
+
+  llvm::Constant *Cast = GV;
+  if (!getLangOpts().OpenCL) {
+    if (auto AS = getTarget().getConstantAddressSpace()) {
+      if (AS != LangAS::Default)
+        Cast = getTargetCodeGenInfo().performAddrSpaceCast(
+            *this, GV, AS.getValue(), LangAS::Default,
+            GV->getValueType()->getPointerTo(
+                getContext().getTargetAddressSpace(LangAS::Default)));
+    }
+  }
+
+  return ConstantAddress(Cast, Alignment);
 }
 
 /// GetAddrOfConstantStringFromObjCEncode - Return a pointer to a constant
@@ -4137,7 +4152,17 @@ ConstantAddress CodeGenModule::GetAddrOfConstantCString(
                                   GlobalName, Alignment);
   if (Entry)
     *Entry = GV;
-  return ConstantAddress(GV, Alignment);
+  llvm::Constant *Cast = GV;
+  if (!getLangOpts().OpenCL) {
+    if (auto AS = getTarget().getConstantAddressSpace()) {
+      if (AS != LangAS::Default)
+        Cast = getTargetCodeGenInfo().performAddrSpaceCast(
+            *this, GV, AS.getValue(), LangAS::Default,
+            GV->getValueType()->getPointerTo(
+                getContext().getTargetAddressSpace(LangAS::Default)));
+    }
+  }
+  return ConstantAddress(Cast, Alignment);
 }
 
 ConstantAddress CodeGenModule::GetAddrOfGlobalTemporary(

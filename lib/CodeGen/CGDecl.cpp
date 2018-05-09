@@ -1371,7 +1371,8 @@ void CodeGenFunction::EmitAutoVarInit(const AutoVarEmission &emission) {
 
   llvm::Type *BP = AllocaInt8PtrTy;
   if (Loc.getType() != BP)
-    Loc = Builder.CreateBitCast(Loc, BP);
+    Loc = Address(EmitCastToVoidPtrInAllocaAddrSpace(Loc.getPointer()),
+                  Loc.getAlignment());
 
   // If the initializer is all or mostly zeros, codegen with memset then do
   // a few stores afterward.
@@ -1394,7 +1395,11 @@ void CodeGenFunction::EmitAutoVarInit(const AutoVarEmission &emission) {
     if (getLangOpts().OpenCL) {
       AS = CGM.getContext().getTargetAddressSpace(LangAS::opencl_constant);
       BP = llvm::PointerType::getInt8PtrTy(getLLVMContext(), AS);
+    } else if (auto OptionalAS = CGM.getTarget().getConstantAddressSpace()) {
+      AS = CGM.getContext().getTargetAddressSpace(OptionalAS.getValue());
+      BP = llvm::PointerType::getInt8PtrTy(getLLVMContext(), AS);
     }
+
     llvm::GlobalVariable *GV =
       new llvm::GlobalVariable(CGM.getModule(), constant->getType(), true,
                                llvm::GlobalValue::PrivateLinkage,
