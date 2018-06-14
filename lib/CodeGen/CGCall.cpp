@@ -4008,8 +4008,23 @@ RValue CodeGenFunction::EmitCall(const CGFunctionInfo &CallInfo,
         // If the argument doesn't match, perform a bitcast to coerce it.  This
         // can happen due to trivial type mismatches.
         if (FirstIRArg < IRFuncTy->getNumParams() &&
-            V->getType() != IRFuncTy->getParamType(FirstIRArg))
-          V = Builder.CreateBitCast(V, IRFuncTy->getParamType(FirstIRArg));
+            V->getType() != IRFuncTy->getParamType(FirstIRArg)) {
+          auto *DT = IRFuncTy->getParamType(FirstIRArg);
+          auto *ST = dyn_cast<llvm::PointerType>(V->getType());
+          if (ST &&
+              ST->getPointerAddressSpace() != DT->getPointerAddressSpace() &&
+              getenv("DBG_CAST")) {
+            llvm::errs() << *V << '\n';
+            llvm::errs() << *DT << '\n';
+            llvm::errs() << *(
+                cast<llvm::Instruction>(V)->getParent()->getParent());
+          }
+          // This is a temporary workaround.
+          // The issue happens for explicit address space cast in C++.
+          // ToDo: Fix SemaOverload.cpp about address space cast in C++
+          // and remove this.
+          V = Builder.CreatePointerCast(V, IRFuncTy->getParamType(FirstIRArg));
+        }
 
         IRCallArgs[FirstIRArg] = V;
         break;
