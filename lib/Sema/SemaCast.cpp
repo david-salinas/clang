@@ -2165,6 +2165,13 @@ static TryCastResult TryReinterpretCast(Sema &Self, ExprResult &SrcExpr,
     } else {
       Kind = CK_BitCast;
     }
+  } else if (SrcType->isPointerType() && DestType->isPointerType() &&
+             SrcType->getAs<PointerType>()
+                     ->getPointeeType()
+                     .getAddressSpace() != DestType->getAs<PointerType>()
+                                               ->getPointeeType()
+                                               .getAddressSpace()) {
+    Kind = CK_AddressSpaceConversion;
   } else {
     Kind = CK_BitCast;
   }

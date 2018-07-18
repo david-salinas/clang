@@ -3143,6 +3143,12 @@ Sema::IsQualificationConversion(QualType FromType, QualType ToType,
       = PreviousToQualsIncludeConst && ToQuals.hasConst();
   }
 
+  // ToDo: Add more detailed control for implicit address space casting for
+  // OpenCL C++.
+  if (FromType.getAddressSpace() != ToType.getAddressSpace() &&
+      !getLangOpts().OpenCLCPlusPlus)
+    return false;
+
   // We are left with FromType and ToType being the pointee types
   // after unwrapping the original FromType and ToType the same number
   // of types. If we unwrapped any pointers, and if FromType and
