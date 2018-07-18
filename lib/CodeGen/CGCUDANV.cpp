@@ -427,22 +427,54 @@ llvm::Function *CGNVCUDARuntime::makeModuleCtorFunction() {
       /*constant*/ true);
   FatbinWrapper->setSection(FatbinSectionName);
 
-  // Register binary with CUDA/HIP runtime. This is substantially different in
-  // default mode vs. separate compilation!
-  if (!RelocatableDeviceCode) {
-    // GpuBinaryHandle = __{cuda|hip}RegisterFatBinary(&FatbinWrapper);
+  // There is only one HIP fat binary per linked module, however there are
+  // multiple constructor functions. Make sure the fat binary is registered
+  // only once.
+  if (IsHIP) {
+    llvm::BasicBlock *IfBlock =
+        llvm::BasicBlock::Create(Context, "if", ModuleCtorFunc);
+    llvm::BasicBlock *ExitBlock =
+        llvm::BasicBlock::Create(Context, "exit", ModuleCtorFunc);
+    GpuBinaryHandle = new llvm::GlobalVariable(
+        TheModule, VoidPtrPtrTy, /*isConstant=*/false,
+        llvm::GlobalValue::LinkOnceAnyLinkage,
+        /*Initializer=*/llvm::ConstantPointerNull::get(VoidPtrPtrTy),
+        "__hip_gpubin_handle");
+    auto HandleValue =
+        CtorBuilder.CreateAlignedLoad(GpuBinaryHandle, CGM.getPointerAlign());
+    llvm::Constant *Zero = llvm::Constant::getNullValue(HandleValue->getType());
+    llvm::Value *EQZero = CtorBuilder.CreateICmpEQ(HandleValue, Zero);
+    CtorBuilder.CreateCondBr(EQZero, IfBlock, ExitBlock);
+    CtorBuilder.SetInsertPoint(IfBlock);
+    // GpuBinaryHandle = __hipRegisterFatBinary(&FatbinWrapper);
+    llvm::CallInst *RegisterFatbinCall = CtorBuilder.CreateCall(
+        RegisterFatbinFunc,
+        CtorBuilder.CreateBitCast(FatbinWrapper, VoidPtrTy));
+    CtorBuilder.CreateAlignedStore(RegisterFatbinCall, GpuBinaryHandle,
+                                   CGM.getPointerAlign());
+    CtorBuilder.CreateBr(ExitBlock);
+    CtorBuilder.SetInsertPoint(ExitBlock);
+    // Call __hip_register_globals(GpuBinaryHandle);
+    if (RegisterGlobalsFunc) {
+      auto HandleValue =
+          CtorBuilder.CreateAlignedLoad(GpuBinaryHandle, CGM.getPointerAlign());
+      CtorBuilder.CreateCall(RegisterGlobalsFunc, HandleValue);
+    }
+  } else if (!RelocatableDeviceCode) {
+    // Register binary with CUDA runtime. This is substantially different in
+    // default mode vs. separate compilation!
+    // GpuBinaryHandle = __cudaRegisterFatBinary(&FatbinWrapper);
     llvm::CallInst *RegisterFatbinCall = CtorBuilder.CreateCall(
         RegisterFatbinFunc,
         CtorBuilder.CreateBitCast(FatbinWrapper, VoidPtrTy));
     GpuBinaryHandle = new llvm::GlobalVariable(
         TheModule, VoidPtrPtrTy, false, llvm::GlobalValue::InternalLinkage,
-        llvm::ConstantPointerNull::get(VoidPtrPtrTy),
-        addUnderscoredPrefixToName("_gpubin_handle"));
+        llvm::ConstantPointerNull::get(VoidPtrPtrTy), "__cuda_gpubin_handle");
 
     CtorBuilder.CreateAlignedStore(RegisterFatbinCall, GpuBinaryHandle,
                                    CGM.getPointerAlign());
 
-    // Call __{cuda|hip}_register_globals(GpuBinaryHandle);
+    // Call __cuda_register_globals(GpuBinaryHandle);
     if (RegisterGlobalsFunc)
       CtorBuilder.CreateCall(RegisterGlobalsFunc, RegisterFatbinCall);
   } else {
@@ -453,15 +485,13 @@ llvm::Function *CGNVCUDARuntime::makeModuleCtorFunction() {
     llvm::Constant *ModuleIDConstant =
         makeConstantString(ModuleID.str(), "", ModuleIDSectionName, 32);
 
-    // Create an alias for the FatbinWrapper that nvcc or hip backend will
-    // look for.
+    // Create an alias for the FatbinWrapper that nvcc will look for.
     llvm::GlobalAlias::create(llvm::GlobalValue::ExternalLinkage,
                               Twine("__fatbinwrap") + ModuleID, FatbinWrapper);
 
-    // void __{cuda|hip}RegisterLinkedBinary%ModuleID%(void (*)(void *), void *,
+    // void __cudaRegisterLinkedBinary%ModuleID%(void (*)(void *), void *,
     // void *, void (*)(void **))
-    SmallString<128> RegisterLinkedBinaryName(
-        addUnderscoredPrefixToName("RegisterLinkedBinary"));
+    SmallString<128> RegisterLinkedBinaryName("__cudaRegisterLinkedBinary");
     RegisterLinkedBinaryName += ModuleID;
     llvm::Constant *RegisterLinkedBinaryFunc = CGM.CreateRuntimeFunction(
         getRegisterLinkedBinaryFnTy(), RegisterLinkedBinaryName);
@@ -520,8 +550,26 @@ llvm::Function *CGNVCUDARuntime::makeModuleDtorFunction() {
 
   auto HandleValue =
       DtorBuilder.CreateAlignedLoad(GpuBinaryHandle, CGM.getPointerAlign());
-  DtorBuilder.CreateCall(UnregisterFatbinFunc, HandleValue);
-
+  // There is only one HIP fat binary per linked module, however there are
+  // multiple destructor functions. Make sure the fat binary is unregistered
+  // only once.
+  if (CGM.getLangOpts().HIP) {
+    llvm::BasicBlock *IfBlock =
+        llvm::BasicBlock::Create(Context, "if", ModuleDtorFunc);
+    llvm::BasicBlock *ExitBlock =
+        llvm::BasicBlock::Create(Context, "exit", ModuleDtorFunc);
+    llvm::Constant *Zero = llvm::Constant::getNullValue(HandleValue->getType());
+    llvm::Value *NEZero = DtorBuilder.CreateICmpNE(HandleValue, Zero);
+    DtorBuilder.CreateCondBr(NEZero, IfBlock, ExitBlock);
+    DtorBuilder.SetInsertPoint(IfBlock);
+    DtorBuilder.CreateCall(UnregisterFatbinFunc, HandleValue);
+    DtorBuilder.CreateAlignedStore(Zero, GpuBinaryHandle,
+                                   CGM.getPointerAlign());
+    DtorBuilder.CreateBr(ExitBlock);
+    DtorBuilder.SetInsertPoint(ExitBlock);
+  } else {
+    DtorBuilder.CreateCall(UnregisterFatbinFunc, HandleValue);
+  }
   DtorBuilder.CreateRetVoid();
   return ModuleDtorFunc;
 }
