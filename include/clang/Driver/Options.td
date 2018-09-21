@@ -596,6 +596,8 @@ def hip_device_lib_EQ : Joined<["--"], "hip-device-lib=">, Group<Link_Group>,
   HelpText<"HIP device library">;
 def fhip_dump_offload_linker_script : Flag<["-"], "fhip-dump-offload-linker-script">,
   Group<f_Group>, Flags<[NoArgumentUnused, HelpHidden]>;
+def hip_early_finalize : Flag<["--"], "hip-early-finalize">,
+  HelpText<"Finalize and embed device ISA as string in host IR for each translation unit.">;
 def libomptarget_nvptx_path_EQ : Joined<["--"], "libomptarget-nvptx-path=">, Group<i_Group>,
   HelpText<"Path to libomptarget-nvptx libraries">;
 def dA : Flag<["-"], "dA">, Group<d_Group>;
