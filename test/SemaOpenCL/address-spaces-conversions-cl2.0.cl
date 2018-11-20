@@ -144,7 +144,7 @@ void test_conversion(__global int *arg_glob, __local int *arg_loc,
 
   AS int *var_cast4 = (AS int *)arg_priv;
 #ifndef GENERIC
-// expected-error-re@-2{{casting 'int *' to type '__{{global|constant}} int *' changes address space of pointer}}
+// expected-error-re@-2{{casting '__private int *' to type '__{{global|constant}} int *' changes address space of pointer}}
 #endif
 
   AS int *var_cast5 = (AS int *)arg_gen;
@@ -215,7 +215,7 @@ void test_conversion(__global int *arg_glob, __local int *arg_loc,
 
   var_cast4 = (AS int *)arg_priv;
 #ifndef GENERIC
-// expected-error-re@-2{{casting 'int *' to type '__{{global|constant}} int *' changes address space of pointer}}
+// expected-error-re@-2{{casting '__private int *' to type '__{{global|constant}} int *' changes address space of pointer}}
 #endif
 
   var_cast5 = (AS int *)arg_gen;
@@ -287,7 +287,7 @@ void test_conversion(__global int *arg_glob, __local int *arg_loc,
 
   b = var_sub - arg_priv;
 #ifndef GENERIC
-// expected-error-re@-2{{arithmetic operation with operands of type  ('__{{global|constant}} int *' and 'int *') which are pointers to non-overlapping address spaces}}
+// expected-error-re@-2{{arithmetic operation with operands of type  ('__{{global|constant}} int *' and '__private int *') which are pointers to non-overlapping address spaces}}
 #endif
 
   b = var_sub - arg_gen;

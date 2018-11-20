@@ -159,6 +159,8 @@ public:
     ///@{ Languages that the frontend can parse and compile.
     C,
     CXX,
+	CXXAMP,
+
     ObjC,
     ObjCXX,
     OpenCL,

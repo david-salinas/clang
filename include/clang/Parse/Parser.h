@@ -712,6 +712,10 @@ private:
     return PP.LookAhead(N-1);
   }
 
+  /// C++ AMP-specific
+  /// check if the given scope is AMP-restricted
+  bool IsInAMPFunction(Scope *);
+
 public:
   /// NextToken - This peeks ahead one token and returns it without
   /// consuming it.
@@ -1404,6 +1408,9 @@ private:
                             bool StopAtSemi = true,
                             bool ConsumeFinalToken = true);
 
+  // C++AMP
+  bool CXXAMPFindRestrictionSeq(CachedTokens &Toks, bool ConsumeFinalToken);
+
   //===--------------------------------------------------------------------===//
   // C99 6.9: External Definitions.
   struct ParsedAttributesWithRange : ParsedAttributes {
@@ -1717,10 +1724,11 @@ private:
   ExprResult ParseLambdaExpression();
   ExprResult TryParseLambdaExpression();
   Optional<unsigned> ParseLambdaIntroducer(LambdaIntroducer &Intro,
+                                           ParsedAttributes &AttrIntro,
                                            bool *SkippedInits = nullptr);
-  bool TryParseLambdaIntroducer(LambdaIntroducer &Intro);
+  bool TryParseLambdaIntroducer(LambdaIntroducer &Intro, ParsedAttributes &AttrIntro);
   ExprResult ParseLambdaExpressionAfterIntroducer(
-               LambdaIntroducer &Intro);
+               LambdaIntroducer &Intro, ParsedAttributes &AttrIntro);
 
   //===--------------------------------------------------------------------===//
   // C++ 5.2p1: C++ Casts
@@ -2479,6 +2487,7 @@ private:
   SourceLocation SkipExtendedMicrosoftTypeAttributes();
   void ParseMicrosoftInheritanceClassAttributes(ParsedAttributes &attrs);
   void ParseBorlandTypeAttributes(ParsedAttributes &attrs);
+  void ParseHCCQualifiers(ParsedAttributes &Attrs);
   void ParseOpenCLKernelAttributes(ParsedAttributes &attrs);
   void ParseOpenCLQualifiers(ParsedAttributes &Attrs);
   /// Parses opencl_unroll_hint attribute if language is OpenCL v2.0
@@ -2636,6 +2645,11 @@ private:
          SourceLocation &EllipsisLoc);
   void ParseBracketDeclarator(Declarator &D);
   void ParseMisplacedBracketDeclarator(Declarator &D);
+
+  // C++AMP
+  unsigned ParseRestrictionSpecification(Declarator &D,
+                                         ParsedAttributes &Attrs,
+                                         SourceLocation &DeclEndLoc);
 
   //===--------------------------------------------------------------------===//
   // C++ 7: Declarations [dcl.dcl]

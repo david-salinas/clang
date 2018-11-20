@@ -250,4 +250,8 @@ def err_openclcxx_not_supported : Error<
 // OpenMP
 def err_omp_more_one_clause : Error<
   "directive '#pragma omp %0' cannot contain more than one '%1' clause%select{| with '%3' name modifier| with 'source' dependence}2">;
+
+// C++AMP
+def err_amp_ill_formed_functor : Error<
+  "Ill-formed functor class. Check restriction specifier of kernel.">;
 }

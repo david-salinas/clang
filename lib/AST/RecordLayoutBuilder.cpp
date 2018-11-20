@@ -18,6 +18,7 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Sema/SemaDiagnostic.h"
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/Triple.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/MathExtras.h"
 
@@ -1736,6 +1737,7 @@ void ItaniumRecordLayoutBuilder::LayoutField(const FieldDecl *D,
   CharUnits FieldSize;
   CharUnits FieldAlign;
 
+  const ReferenceType *RT = D->getType()->getAs<ReferenceType>();
   if (D->getType()->isIncompleteArrayType()) {
     // This is a flexible array member; we can't directly
     // query getTypeInfo about these, so we figure it out here.

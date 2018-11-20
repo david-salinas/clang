@@ -38,6 +38,7 @@ endif()
 
 add_clang_library(clangCodeGen
   BackendUtil.cpp
+  CGAMPRuntime.cpp
   CGAtomic.cpp
   CGBlocks.cpp
   CGBuiltin.cpp

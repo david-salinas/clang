@@ -7678,7 +7678,8 @@ ABIArgInfo AMDGPUABIInfo::classifyArgumentType(QualType Ty,
 
   Ty = useFirstFieldIfTransparentUnion(Ty);
 
-  if (isAggregateTypeForABI(Ty)) {
+  if (isAggregateTypeForABI(Ty)
+      && !getContext().getLangOpts().CPlusPlusAMP) {
     // Records with non-trivial destructors/copy-constructors should not be
     // passed by value.
     if (auto RAA = getRecordArgABI(Ty, getCXXABI()))
@@ -7782,6 +7783,7 @@ void AMDGPUTargetCodeGenInfo::setTargetAttributes(
   if (!FD)
     return;
 
+  auto GPU = M.getTarget().getTargetOpts().CPU;
   llvm::Function *F = cast<llvm::Function>(GV);
 
   const auto *ReqdWGS = M.getLangOpts().OpenCL ?
@@ -7800,13 +7802,16 @@ void AMDGPUTargetCodeGenInfo::setTargetAttributes(
 
     unsigned Min = min.getZExtValue();
     unsigned Max = max.getZExtValue();
+
     if (ReqdWGS && Min == 0 && Max == 0)
       Min = Max = ReqdWGS->getXDim() * ReqdWGS->getYDim() * ReqdWGS->getZDim();
 
     if (Min != 0) {
-      assert(Min <= Max && "Min must be less than or equal Max");
-
-      std::string AttrVal = llvm::utostr(Min) + "," + llvm::utostr(Max);
+      std::string AttrVal = llvm::utostr(Min);
+      if (Max != 0) {
+        assert(Min <= Max && "Min must be less than or equal Max");
+        AttrVal = AttrVal + "," + llvm::utostr(Max);
+      }
       F->addFnAttr("amdgpu-flat-work-group-size", AttrVal);
     } else
       assert(Max == 0 && "Max must be zero");
@@ -7825,24 +7830,50 @@ void AMDGPUTargetCodeGenInfo::setTargetAttributes(
       std::string AttrVal = llvm::utostr(Min);
       if (Max != 0)
         AttrVal = AttrVal + "," + llvm::utostr(Max);
+
       F->addFnAttr("amdgpu-waves-per-eu", AttrVal);
     } else
       assert(Max == 0 && "Max must be zero");
   }
 
   if (const auto *Attr = FD->getAttr<AMDGPUNumSGPRAttr>()) {
-    unsigned NumSGPR = Attr->getNumSGPR();
+    llvm::APSInt sgprs =
+      getConstexprInt(Attr->getNumSGPR(), FD->getASTContext());
+    unsigned NumSGPR = sgprs.getZExtValue();
 
     if (NumSGPR != 0)
       F->addFnAttr("amdgpu-num-sgpr", llvm::utostr(NumSGPR));
   }
 
   if (const auto *Attr = FD->getAttr<AMDGPUNumVGPRAttr>()) {
-    uint32_t NumVGPR = Attr->getNumVGPR();
+    llvm::APSInt vgprs =
+      getConstexprInt(Attr->getNumVGPR(), FD->getASTContext());
+    unsigned NumVGPR = vgprs.getZExtValue();
 
     if (NumVGPR != 0)
       F->addFnAttr("amdgpu-num-vgpr", llvm::utostr(NumVGPR));
   }
+
+  if (const auto *Attr = FD->getAttr<AMDGPUMaxWorkGroupDimAttr>()) {
+    llvm::APSInt x = getConstexprInt(Attr->getX(), FD->getASTContext());
+    llvm::APSInt y = getConstexprInt(Attr->getY(), FD->getASTContext());
+    llvm::APSInt z = getConstexprInt(Attr->getZ(), FD->getASTContext());
+
+    unsigned X = x.getZExtValue();
+    unsigned Y = y.getZExtValue();
+    unsigned Z = z.getZExtValue();
+    std::string AttrVal = llvm::utostr(X) + "," + llvm::utostr(Y) + "," +
+        llvm::utostr(Z);
+    F->addFnAttr("amdgpu-max-work-group-dim", AttrVal);
+    if (FD->getAttr<AMDGPUFlatWorkGroupSizeAttr>() == nullptr) {
+      uint64_t MaxFlat = (uint64_t)X * Y * Z;
+      if (MaxFlat > UINT_MAX)
+        MaxFlat = UINT_MAX;
+      AttrVal = std::string("1,") + llvm::utostr((unsigned)MaxFlat);
+      F->addFnAttr("amdgpu-flat-work-group-size", AttrVal);
+    }
+  }
+
 }
 
 unsigned AMDGPUTargetCodeGenInfo::getOpenCLKernelCallingConv() const {
@@ -7863,7 +7894,7 @@ llvm::Constant *AMDGPUTargetCodeGenInfo::getNullPointer(
   auto &Ctx = CGM.getContext();
   auto NPT = llvm::PointerType::get(PT->getElementType(),
       Ctx.getTargetAddressSpace(LangAS::opencl_generic));
-  return llvm::ConstantExpr::getAddrSpaceCast(
+  return llvm::ConstantExpr::getPointerCast(
       llvm::ConstantPointerNull::get(NPT), PT);
 }
 
@@ -9118,7 +9149,7 @@ public:
 //===----------------------------------------------------------------------===//
 
 bool CodeGenModule::supportsCOMDAT() const {
-  return getTriple().supportsCOMDAT();
+  return (!getLangOpts().CPlusPlusAMP && getTriple().supportsCOMDAT());
 }
 
 const TargetCodeGenInfo &CodeGenModule::getTargetCodeGenInfo() {

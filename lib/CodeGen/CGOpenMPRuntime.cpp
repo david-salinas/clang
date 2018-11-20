@@ -1477,7 +1477,7 @@ Address CGOpenMPRuntime::getOrCreateDefaultLocation(unsigned Flags) {
       DefaultOpenMPPSource =
           CGM.GetAddrOfConstantCString(";unknown;unknown;0;0;;").getPointer();
       DefaultOpenMPPSource =
-          llvm::ConstantExpr::getBitCast(DefaultOpenMPPSource, CGM.Int8PtrTy);
+          llvm::ConstantExpr::getPointerCast(DefaultOpenMPPSource, CGM.Int8PtrTy);
     }
 
     llvm::Constant *Data[] = {llvm::ConstantInt::getNullValue(CGM.Int32Ty),
